@@ -1,20 +1,22 @@
-(define-constant ERR-UNAUTHORIZED (err u401))
+(define-constant ERR-UNAUTHORIZED (err u401))  
 (define-constant ERR-INSUFFICIENT-ALLOWANCE (err u402))
 (define-constant ERR-NOT-FOUND (err u404))
 (define-constant ERR-ALREADY-AUTHORIZED (err u409))
+(define-constant ERR-INVALID-AMOUNT (err u400))
 
-(define-data-var contract-owner principal tx-sender)
-
+;; Maps parent-child pairs to allowance data (amount, spent, active status)
 (define-map allowance-data
   { parent: principal, child: principal }
   { amount: uint, spent: uint, active: bool }
 )
 
+;; Maps parent-child pairs to authorization metadata
 (define-map authorizations
   { parent: principal, child: principal }
   { created-at: uint, created-by: principal }
 )
 
+;; Maps parents to their list of authorized children
 (define-map parent-children
   { parent: principal }
   { children: (list 100 principal) }
@@ -35,14 +37,16 @@
   )
 )
 
+;; Get remaining allowance for a child
 (define-read-only (get-remaining (parent principal) (child principal))
   (let (
-    (allowance (unwrap! (get-allowance parent child) (err u0)))
+    (allowance (unwrap! (get-allowance parent child) ERR-NOT-FOUND))
   )
     (ok (- (get amount allowance) (get spent allowance)))
   )
 )
 
+;; Set or update allowance amount for an authorized child
 (define-public (set-allowance (child principal) (amount uint))
   (let (
     (parent tx-sender)
@@ -51,11 +55,12 @@
     (asserts! (is-some (get-authorization parent child)) ERR-UNAUTHORIZED)
     (ok (map-set allowance-data
       { parent: parent, child: child }
-      { amount: amount, spent: (if (is-none existing) u0 (get spent (unwrap! existing (err u1)))), active: true }
+      { amount: amount, spent: (if (is-none existing) u0 (get spent (unwrap! existing ERR-NOT-FOUND))), active: true }
     ))
   )
 )
 
+;; Authorize a child to receive allowance from the parent
 (define-public (authorize-child (child principal))
   (let (
     (parent tx-sender)
@@ -64,7 +69,7 @@
     (asserts! (is-none existing) ERR-ALREADY-AUTHORIZED)
     (map-set authorizations
       { parent: parent, child: child }
-      { created-at: block-height, created-by: parent }
+      { created-at: stacks-block-height, created-by: parent }
     )
     (let (
       (parent-record (default-to { children: (list) } (map-get? parent-children { parent: parent })))
@@ -80,6 +85,7 @@
   )
 )
 
+;; Revoke a child's authorization and reset their allowance
 (define-public (revoke-child (child principal))
   (let (
     (parent tx-sender)
@@ -94,6 +100,7 @@
   )
 )
 
+;; Child spends from their allowance
 (define-public (spend-allowance (parent principal) (amount uint))
   (let (
     (child tx-sender)
@@ -113,6 +120,7 @@
   )
 )
 
+;; Reset a child's spending back to zero (e.g., monthly reset)
 (define-public (reset-spending (child principal))
   (let (
     (parent tx-sender)
