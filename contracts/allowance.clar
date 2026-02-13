@@ -1,8 +1,9 @@
-(define-constant ERR-UNAUTHORIZED (err u401))  
+(define-constant ERR-UNAUTHORIZED (err u401)) 
 (define-constant ERR-INSUFFICIENT-ALLOWANCE (err u402))
 (define-constant ERR-NOT-FOUND (err u404))
 (define-constant ERR-ALREADY-AUTHORIZED (err u409))
 (define-constant ERR-INVALID-AMOUNT (err u400))
+(define-constant ERR-INVALID-INTERVAL (err u403))
 
 ;; Maps parent-child pairs to allowance data (amount, spent, active status)
 (define-map allowance-data
@@ -12,8 +13,32 @@
 
 ;; Maps parent-child pairs to authorization metadata
 (define-map authorizations
-  { parent: principal, child: principal }
-  { created-at: uint, created-by: principal }
+  {
+    parent: principal,
+    child: principal,
+  }
+  {
+    created-at: uint,
+    created-by: principal,
+  }
+)
+
+;; Maps parent-child pairs to renewal settings
+(define-map allowance-renewal
+  {
+    parent: principal,
+    child: principal,
+  }
+  {
+    interval: uint,
+    last-renewal: uint,
+  }
+)
+
+;; Maps parent to their deposited balance in the vault
+(define-map vault-balances
+  { parent: principal }
+  { balance: uint }
 )
 
 ;; Maps parents to their list of authorized children
@@ -60,6 +85,21 @@
   )
 )
 
+;; Set automatic allowance renewal interval
+(define-public (set-renewal (child principal) (interval uint))
+  (let ((parent tx-sender))
+    (asserts! (is-some (get-authorization parent child)) ERR-UNAUTHORIZED)
+    (asserts! (> interval u0) ERR-INVALID-INTERVAL)
+    (ok (map-set allowance-renewal {
+      parent: parent,
+      child: child,
+    } {
+      interval: interval,
+      last-renewal: stacks-block-height,
+    }))
+  )
+)
+
 ;; Authorize a child to receive allowance from the parent
 (define-public (authorize-child (child principal))
   (let (
@@ -92,6 +132,7 @@
   )
     (asserts! (is-some (get-authorization parent child)) ERR-NOT-FOUND)
     (map-delete authorizations { parent: parent, child: child })
+    (map-delete allowance-renewal { parent: parent, child: child })
     (map-set allowance-data
       { parent: parent, child: child }
       { amount: u0, spent: u0, active: false }
@@ -100,23 +141,78 @@
   )
 )
 
+;; Deposit funds into the contract vault
+(define-public (deposit (amount uint))
+  (let (
+      (parent tx-sender)
+      (current-balance (default-to u0 (get balance (map-get? vault-balances { parent: parent }))))
+    )
+    (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+    (ok (map-set vault-balances { parent: parent } { balance: (+ current-balance amount) }))
+  )
+)
+
+;; Withdraw unused funds from the vault
+(define-public (withdraw-funds (amount uint))
+  (let (
+      (parent tx-sender)
+      (current-balance (default-to u0 (get balance (map-get? vault-balances { parent: parent }))))
+    )
+    (asserts! (>= current-balance amount) ERR-INSUFFICIENT-ALLOWANCE)
+    (try! (as-contract (stx-transfer? amount tx-sender parent)))
+    (ok (map-set vault-balances { parent: parent } { balance: (- current-balance amount) }))
+  )
+)
+
 ;; Child spends from their allowance
 (define-public (spend-allowance (parent principal) (amount uint))
   (let (
     (child tx-sender)
     (allowance (unwrap! (get-allowance parent child) ERR-NOT-FOUND))
-    (remaining (- (get amount allowance) (get spent allowance)))
+    (renewal (map-get? allowance-renewal { parent: parent, child: child }))
+    (current-height stacks-block-height)
+    (should-renew (match renewal
+      r (>= current-height (+ (get last-renewal r) (get interval r)))
+      false
+    ))
+    (current-spent (if should-renew u0 (get spent allowance)))
+    (remaining (- (get amount allowance) current-spent))
   )
     (asserts! (get active allowance) ERR-UNAUTHORIZED)
     (asserts! (>= remaining amount) ERR-INSUFFICIENT-ALLOWANCE)
-    (ok (map-set allowance-data
-      { parent: parent, child: child }
-      { 
-        amount: (get amount allowance),
-        spent: (+ (get spent allowance) amount),
-        active: true
-      }
-    ))
+
+    ;; Ensure parent has enough funds in vault
+    (let ((parent-balance (default-to u0 (get balance (map-get? vault-balances { parent: parent })))))
+      (asserts! (>= parent-balance amount) ERR-INSUFFICIENT-ALLOWANCE)
+
+      ;; 1. Update renewal (if needed)
+      (if should-renew
+        (map-set allowance-renewal
+          { parent: parent, child: child }
+          {
+            interval: (unwrap-panic (get interval renewal)),
+            last-renewal: current-height,
+          }
+        )
+        false
+      )
+
+      ;; 2. Transfer STX
+      (try! (as-contract (stx-transfer? amount tx-sender child)))
+
+      ;; 3. Deduct from parent's vault balance
+      (map-set vault-balances { parent: parent } { balance: (- parent-balance amount) })
+
+      ;; 4. Update allowance record
+      (ok (map-set allowance-data
+        { parent: parent, child: child }
+        {
+          amount: (get amount allowance),
+          spent: (+ current-spent amount),
+          active: true,
+        }
+      ))
+    )
   )
 )
 
@@ -158,4 +254,8 @@
     })
     ERR-NOT-FOUND
   )
+)
+
+(define-read-only (get-vault-balance (parent principal))
+  (default-to u0 (get balance (map-get? vault-balances { parent: parent })))
 )
