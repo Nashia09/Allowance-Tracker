@@ -1,4 +1,4 @@
-(define-constant ERR-UNAUTHORIZED (err u401))
+(define-constant ERR-UNAUTHORIZED (err u401))    
 (define-constant ERR-INSUFFICIENT-ALLOWANCE (err u402))
 (define-constant ERR-NOT-FOUND (err u404))
 (define-constant ERR-ALREADY-AUTHORIZED (err u409))
