@@ -66,6 +66,6 @@ plan:
         - emulated-contract-publish:
             contract-name: allowance
             emulated-sender: ST1PQHQKV0RJXZFY1DGX8MNSNYVE3VGZJSRTPGZGM
-            path: contracts/allowance.clar
+            path: "contracts\\allowance.clar"
             clarity-version: 3
       epoch: "3.2"
