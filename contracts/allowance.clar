@@ -124,6 +124,21 @@
   )
 )
 
+;; Set automatic allowance renewal interval
+(define-public (set-renewal (child principal) (interval uint))
+  (let ((parent tx-sender))
+    (asserts! (is-some (get-authorization parent child)) ERR-UNAUTHORIZED)
+    (asserts! (> interval u0) ERR-INVALID-INTERVAL)
+    (ok (map-set allowance-renewal {
+      parent: parent,
+      child: child,
+    } {
+      interval: interval,
+      last-renewal: stacks-block-height,
+    }))
+  )
+)
+
 ;; Authorize a child to receive allowance from the parent
 (define-public (authorize-child (child principal))
   (let (
@@ -175,6 +190,29 @@
       active: false,
     })
     (ok true)
+  )
+)
+
+;; Deposit funds into the contract vault
+(define-public (deposit (amount uint))
+  (let (
+      (parent tx-sender)
+      (current-balance (default-to u0 (get balance (map-get? vault-balances { parent: parent }))))
+    )
+    (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+    (ok (map-set vault-balances { parent: parent } { balance: (+ current-balance amount) }))
+  )
+)
+
+;; Withdraw unused funds from the vault
+(define-public (withdraw-funds (amount uint))
+  (let (
+      (parent tx-sender)
+      (current-balance (default-to u0 (get balance (map-get? vault-balances { parent: parent }))))
+    )
+    (asserts! (>= current-balance amount) ERR-INSUFFICIENT-ALLOWANCE)
+    (try! (as-contract (stx-transfer? amount tx-sender parent)))
+    (ok (map-set vault-balances { parent: parent } { balance: (- current-balance amount) }))
   )
 )
 
@@ -273,4 +311,8 @@
     })
     ERR-NOT-FOUND
   )
+)
+
+(define-read-only (get-vault-balance (parent principal))
+  (default-to u0 (get balance (map-get? vault-balances { parent: parent })))
 )
