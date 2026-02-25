@@ -48,6 +48,12 @@
   { children: (list 100 principal) }
 )
 
+;; Maps parents to their vault balances
+(define-map vault-balances
+  { parent: principal }
+  { balance: uint }
+)
+
 (define-read-only (get-allowance
     (parent principal)
     (child principal)
@@ -111,21 +117,6 @@
     (child principal)
     (interval uint)
   )
-  (let ((parent tx-sender))
-    (asserts! (is-some (get-authorization parent child)) ERR-UNAUTHORIZED)
-    (asserts! (> interval u0) ERR-INVALID-INTERVAL)
-    (ok (map-set allowance-renewal {
-      parent: parent,
-      child: child,
-    } {
-      interval: interval,
-      last-renewal: stacks-block-height,
-    }))
-  )
-)
-
-;; Set automatic allowance renewal interval
-(define-public (set-renewal (child principal) (interval uint))
   (let ((parent tx-sender))
     (asserts! (is-some (get-authorization parent child)) ERR-UNAUTHORIZED)
     (asserts! (> interval u0) ERR-INVALID-INTERVAL)
